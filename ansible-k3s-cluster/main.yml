@@ -1,0 +1,96 @@
+---
+- name: Configure k3s cluster
+  hosts: k3s_cluster
+  become: true
+  vars_files:
+    - ./vars/vars.yml
+  tasks:
+  # Basic Config
+    - name: Update and upgrade packages
+      apt:
+        update_cache: yes
+        upgrade: safe
+
+    - name: Add SSH public key to authorized keys
+      authorized_key:
+        user: "{{ ansible_user }}"
+        key: "{{ public_key }}"
+
+    - name: Set the timezone to Europe/Paris
+      community.general.timezone:
+        name: Europe/Paris
+
+# UFW configuration
+    - name: Install UFW
+      apt:
+        name: ufw
+        state: present
+
+    - name: Allow DNS traffic
+      ansible.builtin.ufw:
+        rule: allow
+        port: 53
+        proto: "{{ item }}"
+      loop:
+        - tcp
+        - udp
+
+    - name: Allow SSH access from external laptops
+      ansible.builtin.ufw:
+        rule: allow
+        src: "{{ item }}"
+        port: 22
+        proto: tcp
+      loop: "{{ external_ssh_ips }}"
+
+    - name: Allow k3s API access from external laptops
+      ansible.builtin.ufw:
+        rule: allow
+        src: "{{ item }}"
+        port: 6443
+        proto: tcp
+      loop: "{{ external_ssh_ips }}"
+
+    - name: Configure UFW for k3s cluster nodes communication
+      ansible.builtin.ufw:
+        rule: allow
+        src: "{{ item[0] }}"
+        port: "{{ item[1] }}"
+      with_nested:
+        - "{{ cluster_ips }}"
+        - "{{ k3s_ports }}"
+
+    # - name: Enable UFW
+    #   ansible.builtin.ufw:
+    #     state: enabled
+    #     policy: deny
+
+# Install k3s
+    - name: Check if k3s is already installed
+      ansible.builtin.stat:
+        path: /usr/local/bin/k3s
+      register: k3s_installed
+
+    - name: Install k3s on master node 1
+      become: false
+      ansible.builtin.shell: k3sup install --ip "{{ hostvars[inventory_hostname]['ansible_host'] }}" --user "{{ ansible_user }}" --context k3s --local-path ~/.kube/kubeconfig --cluster --merge --k3s-extra-args="--node-name={{ inventory_hostname }} --flannel-iface=ens3"
+      delegate_to: localhost
+      when: "'k3s-master-node-1' in inventory_hostname and not k3s_installed.stat.exists"
+
+    - name: Install k3s on master node 2
+      become: false
+      ansible.builtin.shell: k3sup join --ip "{{ hostvars[inventory_hostname]['ansible_host'] }}" --user "{{ ansible_user }}" --server-ip "{{ hostvars['k3s-master-node-1']['ansible_host'] }}" --server-user "{{ hostvars['k3s-master-node-1']['ansible_user'] }}" --server --k3s-extra-args="--node-name={{ inventory_hostname }} --flannel-iface=ens3"
+      delegate_to: localhost
+      when: "'k3s-master-node-2' in inventory_hostname and not k3s_installed.stat.exists"
+
+    - name: Install k3s on master node 3
+      become: false
+      ansible.builtin.shell: k3sup join --ip "{{ hostvars[inventory_hostname]['ansible_host'] }}" --user "{{ ansible_user }}" --server-ip "{{ hostvars['k3s-master-node-1']['ansible_host'] }}" --server-user "{{ hostvars['k3s-master-node-1']['ansible_user'] }}" --server --k3s-extra-args="--node-name={{ inventory_hostname }} --flannel-iface=ens3"
+      delegate_to: localhost
+      when: "'k3s-master-node-3' in inventory_hostname and not k3s_installed.stat.exists"
+
+    - name: Install k3s on agent nodes
+      become: false
+      ansible.builtin.shell: k3sup join --ip "{{ hostvars[inventory_hostname]['ansible_host'] }}" --user "{{ ansible_user }}" --server-ip "{{ hostvars['k3s-master-node-1']['ansible_host'] }}" --server-user "{{ hostvars['k3s-master-node-1']['ansible_user'] }}" --k3s-extra-args="--node-name={{ inventory_hostname }} --flannel-iface=ens3"
+      delegate_to: localhost
+      when: "('k3s-worker-node-1' in inventory_hostname or 'k3s-worker-node-2' in inventory_hostname or 'k3s-worker-node-3' in inventory_hostname) and not k3s_installed.stat.exists"

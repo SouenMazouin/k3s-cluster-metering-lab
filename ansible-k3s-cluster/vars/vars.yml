@@ -1,0 +1,15 @@
+cluster_ips: []
+
+k3s_ports:
+  - 6443
+  - 2379
+  - 2380
+  - 10250
+  - 10251
+  - 10252
+
+external_ssh_ips: []
+
+# flannel_iface: flannel.1
+
+public_key: ""
